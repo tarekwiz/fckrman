@@ -163,6 +163,7 @@ FileList FileList::from_manifest(RManifest const &manifest) {
     }
     auto chunk_lookup = std::unordered_map<ChunkID, FileChunk> {};
     for (auto const& bundle: manifest.bundles) {
+        result.unreferenced.insert(bundle.id);
         int32_t compressed_offset = 0;
         for (auto const& chunk: bundle.chunks) {
             chunk_lookup[chunk.id] = FileChunk{chunk, bundle.id, compressed_offset, {}};
@@ -215,6 +216,9 @@ FileList FileList::from_manifest(RManifest const &manifest) {
             rman_rethrow(chunk = chunk_lookup.at(chunk_id));
             chunk.uncompressed_offset = uncompressed_offset;
             uncompressed_offset += chunk.uncompressed_size;
+            if (auto r = result.unreferenced.find(chunk.bundle_id); r != result.unreferenced.end()) {
+                result.unreferenced.erase(r);
+            }
         }
     }
     return result;
@@ -227,7 +231,7 @@ FileList FileList::read(const char *data, size_t size) {
         return FileList::from_manifest(RManifest::read(data, size));
     } else if (*data == '[') {
         auto j = json::parse(data, data + size);
-        return FileList { j };
+        return FileList { j, {} };
     } else {
         rman_error("Unrecognized manifest format!");
     }
@@ -241,7 +245,15 @@ std::string FileInfo::to_csv() const noexcept {
     result += ',';
     result += to_hex(id);
     result += ',';
-    result += std::to_string(chunks.size());
+    bool hadfirst = false;
+    for (auto const& l: langs) {
+        if (hadfirst) {
+            result += ';';
+        } else {
+            hadfirst = true;
+        }
+        result += l;
+    }
     return result;
 }
 
@@ -285,10 +297,7 @@ void FileList::remove_uptodate(FileList const& old_list) noexcept {
         if (old == old_lookup.end()) {
             return false;
         }
-        if (old->second->id == file.id) {
-            return true;
-        }
-        return file.remove_uptodate(*old->second);
+        return file.is_uptodate(*old->second);
     });
 }
 
@@ -422,15 +431,10 @@ bool FileInfo::remove_verified(std::string const& folder_name) noexcept {
     return true;
 }
 
-bool FileInfo::remove_uptodate(FileInfo const& old_file) noexcept {
-    using key_t = std::pair<int32_t, ChunkID>;
-    auto old_lookup = std::set<key_t>{};
-    for(auto const& old: old_file.chunks) {
-        old_lookup.insert({old.uncompressed_offset, old.id});
+bool FileInfo::is_uptodate(FileInfo const& old_file) const noexcept {
+    if (id == old_file.id) {
+        return true;
     }
-    remove_if(chunks, [&](FileChunk const& chunk) {
-        return old_lookup.find({chunk.uncompressed_offset, chunk.id}) != old_lookup.end();
-    });
-    return old_file.chunks.empty();
+    return false;
 }
 

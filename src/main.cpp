@@ -5,6 +5,7 @@
 #include "download.hpp"
 #include <iostream>
 #include <fstream>
+#include <set>
 
 using namespace rman;
 
@@ -42,6 +43,12 @@ struct Main {
         case Action::List:
             action_list();
             break;
+        case Action::ListBundles:
+            action_list_bundles();
+            break;
+        case Action::ListChunks:
+            action_list_chunks();
+            break;
         case Action::Json:
             action_json();
             break;
@@ -60,6 +67,57 @@ struct Main {
                 continue;
             }
             std::cout << file.to_csv() << std::endl;
+        }
+    }
+
+    void action_list_bundles() noexcept {
+        auto visited = std::set<BundleID>{};
+        for (auto& file: manifest.files) {
+            if (cli.exist && file.remove_exist(cli.output)) {
+                continue;
+            }
+            if (cli.verify && file.remove_verified(cli.output)) {
+                continue;
+            }
+            for (auto const& chunk: file.chunks) {
+                auto const id = chunk.bundle_id;
+                if (visited.find(id) != visited.end()) {
+                    continue;
+                }
+                visited.insert(id);
+                std::cout << cli.download.prefix << "/bundles/" << to_hex(chunk.bundle_id) << ".bundle" << std::endl;
+            }
+        }
+        for (auto const& id: manifest.unreferenced) {
+            if (visited.find(id) != visited.end()) {
+                continue;
+            }
+            visited.insert(id);
+            std::cout << cli.download.prefix << "/bundles/" << to_hex(id) << ".bundle" << std::endl;
+        }
+    }
+
+    void action_list_chunks() noexcept {
+        auto visited = std::set<std::pair<BundleID, ChunkID>>{};
+        for (auto& file: manifest.files) {
+            if (cli.exist && file.remove_exist(cli.output)) {
+                continue;
+            }
+            if (cli.verify && file.remove_verified(cli.output)) {
+                continue;
+            }
+            for (auto const& chunk: file.chunks) {
+                auto const id = std::make_pair(chunk.bundle_id, chunk.id);
+                if (visited.find(id) != visited.end()) {
+                    continue;
+                }
+                visited.insert(id);
+                std::cout << to_hex(chunk.bundle_id) << '\t'
+                          << to_hex(chunk.id) << '\t'
+                          << to_hex(chunk.compressed_offset, 8) << '\t'
+                          << to_hex(chunk.compressed_size, 8) << '\t'
+                          << to_hex(chunk.uncompressed_size, 8) << std::endl;;
+            }
         }
     }
 
@@ -84,7 +142,7 @@ struct Main {
     }
 
     void action_download() {
-        client = std::make_unique<HttpClient>(cli.download, cli.curl_verbose, cli.connections);
+        client = std::make_unique<HttpClient>(cli.download);
         for (auto& file: manifest.files) {
             if (cli.exist && file.remove_exist(cli.output)) {
                 std::cout << "SKIP: " << file.path << std::endl;
@@ -100,11 +158,14 @@ struct Main {
     }
 
     void download_file(FileInfo const& file) {
-        auto outfile = file.create_file(cli.output);
-        auto bundles = BundleDownloadList::from_file_info(file);
-        client->set_outfile(&outfile);
+        std::unique_ptr<std::ofstream> outfile = {};
+        if (!cli.nowrite) {
+            outfile = std::make_unique<std::ofstream>(file.create_file(cli.output));
+        }
+        auto bundles = BundleDownloadList::from_file_info(file, cli.download);
+        client->set_outfile(outfile.get());
         size_t total = bundles.unfinished.size();
-        for (uint32_t tried = 0; !bundles.unfinished.empty() && tried <= cli.retry; tried++) {
+        for (uint32_t tried = 0; !bundles.unfinished.empty() && tried <= cli.download.retry; tried++) {
             std::cout << '\r'
                       << "Try: " << tried << ' '
                       << "Bundles: " << bundles.good.size()

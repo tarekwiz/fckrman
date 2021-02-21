@@ -8,19 +8,20 @@
 #include <optional>
 #include <regex>
 #include <fstream>
+#include <set>
 
 namespace rman {
     template <typename T>
-    inline std::string to_hex (T id) noexcept {
+    inline std::string to_hex (T id, std::size_t s = 16) noexcept {
         static constexpr char table[] = "0123456789ABCDEF";
         char result[] = "0000000000000000";
         auto num = static_cast<uint64_t>(id);
-        auto output = result + 15;
+        auto output = result + (s - 1);
         while (num) {
             *(output--) = table[num & 0xF];
             num >>= 4;
         }
-        return std::string(result, 16);
+        return std::string(result, s);
     };
 
     struct FileChunk : RMANChunk {
@@ -50,11 +51,12 @@ namespace rman {
         std::ofstream create_file(std::string const& folder_name) const;
         bool remove_exist(std::string const& folder_name) noexcept;
         bool remove_verified(std::string const& folder_name) noexcept;
-        bool remove_uptodate(FileInfo const& old) noexcept;
+        bool is_uptodate(FileInfo const& old) const noexcept;
     };
 
     struct FileList {
         std::list<FileInfo> files;
+        std::set<BundleID> unreferenced;
 
         static FileList from_manifest(RManifest const& manifest);
         static FileList read(char const* data, size_t size);
